@@ -9,10 +9,12 @@ import torch.optim as optim
 import torch.nn as nn
 from model import VolatilityPredictor
 import requests
+import random
 
 model = VolatilityPredictor(input_size=2, hidden_size=16, num_layers=2)
 model.train()
-
+VOLATILITY_THRESHOLD = 0.002
+BATCH_SIZE = 8
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 criterion = nn.BCELoss()
 
@@ -25,7 +27,7 @@ def initialize_scaler(symbol="BTCUSDT", limit=1000):
         price_high = float(kline[2])
         price_low = float(kline[3])
         price_close = float(kline[4])
-        volume = float(kline([5]))
+        volume = float(kline[5])
         prev_features.append([(price_high - price_low)/price_close, volume])
 
     arr = np.array(prev_features)
@@ -41,7 +43,7 @@ async def stream_data(scaler=None, k=100):
     uri = "wss://stream.binance.us:9443/ws/btcusdt@kline_1m"
     window = deque(maxlen=k)
     pending_sample = None
-    VOLATILITY_THRESHOLD = 0.002
+    replay_buffer = deque(maxlen=200)
 
     async with websockets.connect(uri, ssl=True) as websocket:
         print("Connected to Binance Stream")
@@ -57,23 +59,28 @@ async def stream_data(scaler=None, k=100):
                 candle_start_time = kline['t']
 
                 if is_closed and volume > 0.0:
+                    realized_spread = (price_high - price_low) / price_close
                     if pending_sample is not None:
-                        realized_spread = (price_high - price_low) / price_close
                         target_label = 1.0 if realized_spread > VOLATILITY_THRESHOLD else 0.0
-                        target_tensor = torch.tensor([[target_label]], dtype=torch.float32)
-                        model.train()
-                        optimizer.zero_grad()
-                        past_input = pending_sample['input']
-                        training_pred = model(past_input)
-                        loss = criterion(training_pred, target_tensor)
-                        loss.backward()
-                        optimizer.step()
-                        print(f"--- [Online Train Step] Loss: {loss.item():.6f} | Target was: {target_label} ---")
+
+                        replay_buffer.append((pending_sample['input'], target_label))
+
+                        if len(replay_buffer) >= BATCH_SIZE:
+                            batch = random.sample(replay_buffer, BATCH_SIZE)
+                            torch_inputs = torch.cat([item[0] for item in batch], dim=0)
+                            batch_targets = [[item[1]] for item in batch]
+                            torch_targets = torch.tensor(batch_targets, dtype=torch.float32)
+                            model.train()
+                            optimizer.zero_grad()
+                            predictions = model(torch_inputs)
+                            loss = criterion(predictions, torch_targets)
+                            loss.backward()
+                            optimizer.step()
+                            print(f"--- [Online Batch Optimization] Loss: {loss.item():.6f} | Buffer Size: {len(replay_buffer)} ---")
                         pending_sample = None
 
                     print(f"Candle Closed | Close: ${price_close} | High: ${price_high} | Low: ${price_low} | Vol: {volume}")
-                    curr_features = [(price_high - price_low) / price_close, volume]
-                    window.append(curr_features)
+                    window.append([realized_spread, volume])
                     if len(window) >= k:
                         arr = np.array(window)
                         input_tensor = torch.from_numpy(scaler.transform(arr)).unsqueeze(0).float()
