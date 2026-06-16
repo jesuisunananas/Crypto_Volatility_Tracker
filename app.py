@@ -37,7 +37,7 @@ async def stream_data(k=100):
                             volatility_probability = model(input_tensor)
                         print(f"Predicted Volatility Probability: {volatility_probability.item():.4f}")
                 else:
-                    print(f"Live price: ${price_close}", end='\r')
+                    print(f"Live price: ${price_close:.2f}", end='\r')
 
                 print(json.dumps(data, indent=2))
 
