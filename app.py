@@ -150,9 +150,9 @@ async def stream_data(scaler=None, k=100):
         except websockets.ConnectionClosed:
             print("Connection to Binance Stream closed")
 
-        except KeyboardInterrupt:
-            print("User cancelled execution")
-
 if __name__ == "__main__":
-    scaler = initialize_scaler()
-    asyncio.run(stream_data(scaler))
+    try:
+        scaler = initialize_scaler()
+        asyncio.run(stream_data(scaler))
+    except KeyboardInterrupt:
+        print("User cancelled execution")
