@@ -55,7 +55,7 @@ OPTIMIZATION_LATENCY_SECONDS = Histogram(
 )
 
 
-def initialize_scaler(symbol="BTCUSDT", limit=1000):
+def initialize_model_context(symbol="BTCUSDT", limit=1000, k=100):
     url = f"https://api.binance.us/api/v3/klines?symbol={symbol}&interval=1m&limit={limit}"
     response = requests.get(url).json()
     prev_features = []
@@ -70,18 +70,19 @@ def initialize_scaler(symbol="BTCUSDT", limit=1000):
     arr = np.array(prev_features)
     scaler = StandardScaler()
     scaler.fit(arr)
-    return scaler
+    initial_window = prev_features[-k:]
+    return scaler, initial_window
 
-async def stream_data(scaler=None, k=100):
-    if not scaler:
-        print("Error: Scaler must be initialized first with initalize_scaler()")
+async def stream_data(scaler, initial_window, k=100):
+    if not scaler or not initial_window:
+        print("Error: Model context must be initialized first")
         return
     
     start_http_server(port=5000, addr="0.0.0.0")
     print("Prometheus metrics exporter running on http://localhost:5000/metrics")
 
     uri = "wss://stream.binance.us:9443/ws/btcusdt@kline_1m"
-    window = deque(maxlen=k)
+    window = deque(initial_window, maxlen=k)
     pending_sample = None
     replay_buffer = deque(maxlen=200)
 
@@ -152,7 +153,7 @@ async def stream_data(scaler=None, k=100):
 
 if __name__ == "__main__":
     try:
-        scaler = initialize_scaler()
-        asyncio.run(stream_data(scaler))
+        scaler, initial_window = initialize_model_context()
+        asyncio.run(stream_data(scaler, initial_window))
     except KeyboardInterrupt:
         print("User cancelled execution")
